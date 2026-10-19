@@ -6,4 +6,18 @@
   *, ::before, ::after {
     box-sizing: border-box;
   }
+
+  html, body, #cosmetics-root {
+    background-color: #FAF8F5 !important;
+    color: #141316;
+    min-height: 100%;
+  }
+
+  html {
+    overflow-x: hidden;
+  }
+
+  body {
+    margin: 0;
+  }
 }

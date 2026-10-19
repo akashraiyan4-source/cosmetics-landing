@@ -1,46 +1,29 @@
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
 
-// সিম্পল ইন-মেমোরি রেট লিমিটার ম্যাপ (হাজার হাজার ক্লায়েন্টের জন্য পরবর্তীতে এটি Redis-এ শিফট করা যাবে)
-const rateLimitMap = new Map<string, { count: number; lastReset: number }>();
-const LIMIT_WINDOW = 15 * 60 * 1000; // ১৫ মিনিট
-const MAX_REQUESTS = 30; // প্রতি ১৫ মিনিটে সর্বোচ্চ ৩০টি রিকোয়েস্ট
+/**
+ * Edge guard for the landing page. This project has no `/api` routes — every form and chat
+ * call goes to the Universal Backend — so we only stamp a request id and reject methods a
+ * static site never needs.
+ */
+const ALLOWED_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 
 export function middleware(request: NextRequest) {
-  // কেবল /api/ রাউটগুলোর জন্য রেট লিমিট ও সিকিউরিটি চেক কার্যকর হবে
-  if (request.nextUrl.pathname.startsWith('/api/')) {
-    
-    // ১. রেট লিটারিং চেক (আইপি বেজড)
-    const ip = request.ip || request.headers.get('x-forwarded-for') || '127.0.0.1';
-    const now = Date.now();
-    const clientRecord = rateLimitMap.get(ip);
-
-    if (clientRecord) {
-      if (now - clientRecord.lastReset < LIMIT_WINDOW) {
-        if (clientRecord.count >= MAX_REQUESTS) {
-          return NextResponse.json(
-            { error: 'Too many requests. Please try again later.' },
-            { status: 429 }
-          );
-        }
-        clientRecord.count++;
-      } else {
-        clientRecord.lastReset = now;
-        clientRecord.count = 1;
-      }
-    } else {
-      rateLimitMap.set(ip, { count: 1, lastReset: now });
-    }
-
-    // ২. হ্যান্ডশেক বা রিকোয়েস্ট স্যানিটাইজেশন হেডার পাস করা
-    const response = NextResponse.next();
-    response.headers.set('X-Enterprise-Guard', 'Active');
-    return response;
+  if (!ALLOWED_METHODS.has(request.method)) {
+    return new NextResponse('Method Not Allowed', {
+      status: 405,
+      headers: { Allow: 'GET, HEAD, OPTIONS', 'Cache-Control': 'no-store' },
+    });
   }
 
-  return NextResponse.next();
+  const requestId = request.headers.get('x-request-id')?.slice(0, 64) || crypto.randomUUID();
+  const requestHeaders = new Headers(request.headers);
+  requestHeaders.set('x-request-id', requestId);
+  const response = NextResponse.next({ request: { headers: requestHeaders } });
+  response.headers.set('X-Request-ID', requestId);
+  return response;
 }
 
 export const config = {
-  matcher: '/api/:path*',
+  matcher: ['/((?!_next/static|_next/image|niches/|favicon.ico).*)'],
 };
