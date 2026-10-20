@@ -56,6 +56,14 @@ const nextConfig = {
   output: 'standalone',
   poweredByHeader: false,
   env: { NEXT_PUBLIC_BACKEND_URL: backend.value },
+  async rewrites() {
+    return [
+      {
+        source: '/api/:path*',
+        destination: `${backend.value}/api/:path*`,
+      },
+    ];
+  },
   async headers() {
     return [
       { source: '/:path*', headers: securityHeaders },
