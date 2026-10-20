@@ -10,23 +10,17 @@ import { useBeforeAfterSlider } from '../../lib/useBeforeAfterSlider';
 const OFFLINE_CHAT_REPLY = 'Inquiry logged under VIP protocol. Our concierge desk will follow up discreetly.';
 
 /**
- * Critical Anti-FOUC & Anti-Glitch CSS Guard:
- * এটি ব্রাউজারের প্রথম পেইন্টেই (0ms) লোড হবে, ফলে এক্সটার্নাল CSS আসতে দেরি হলেও
- * কখনোই সাদা স্ক্রিন, ভাঙা ফন্ট বা এআই বারের লাফানো (Layout Jump) দেখা যাবে না।
+ * Ultimate Anti-FOUC & Anti-Jump Guard:
+ * পেজ লোড হওয়ার প্রথম ফ্রেম থেকেই ব্যাকগ্রাউন্ড এবং ডানদিকের ডক বারকে ফিক্সড পজিশনে আটকে রাখবে,
+ * ফলে রিফ্রেশ করলে আর কোনোভাবেই এআই বার লাফাবে না বা পেজ গ্লিচ করবে না।
  */
-const CRITICAL_ANTI_GLITCH_CSS = `
+const CRITICAL_ANTI_JUMP_CSS = `
   html, body, #cosmetics-root {
     background-color: #FAF8F5 !important;
     color: #1A1917;
     margin: 0;
     padding: 0;
     overflow-x: hidden;
-  }
-  #adaModal:not(.show), #aiModal:not(.show) {
-    opacity: 0 !important;
-    visibility: hidden !important;
-    pointer-events: none !important;
-    transform: translate3d(0, 16px, 0);
   }
   #sideDock {
     position: fixed !important;
@@ -36,9 +30,27 @@ const CRITICAL_ANTI_GLITCH_CSS = `
     transform: translateZ(0);
     backface-visibility: hidden;
   }
+  #adaModal:not(.show), #aiModal:not(.show) {
+    opacity: 0 !important;
+    visibility: hidden !important;
+    pointer-events: none !important;
+    transform: translate3d(0, 16px, 0);
+  }
   .hero-video-wrapper .slider-frame {
     background-color: #EAE5DF;
     transform: translateZ(0);
+  }
+  .brand-card-wrapper {
+    background: #FFFFFF;
+    border: 1px solid rgba(212, 175, 55, 0.25);
+    border-radius: 16px;
+    padding: 16px 24px;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.04);
+    max-width: 1200px;
+    margin: 20px auto 10px auto;
+    display: flex;
+    align-items: center;
+    justify-content: center;
   }
 `;
 
@@ -331,15 +343,17 @@ export default function CosmeticPage() {
 
   return (
     <main id="cosmetics-root" style={{ backgroundColor: '#FAF8F5', minHeight: '100vh' }}>
-      <style dangerouslySetInnerHTML={{ __html: CRITICAL_ANTI_GLITCH_CSS }} />
+      <style dangerouslySetInnerHTML={{ __html: CRITICAL_ANTI_JUMP_CSS }} />
 
-      {/* 0. Top Navigation & Centered Brand Logo */}
-      <header className="site-nav">
-        <a href="#" className="brand-logo">
-          <div className="brand-monogram">A</div>
-          <div className="brand-title">AURA • BEVERLY HILLS</div>
-        </a>
-      </header>
+      {/* 0. Top Navigation & Centered Brand Logo inside a Premium Card Container */}
+      <div className="brand-card-wrapper">
+        <header className="site-nav" style={{ width: '100%', margin: 0, padding: 0, background: 'transparent', border: 'none' }}>
+          <a href="#" className="brand-logo" style={{ margin: '0 auto' }}>
+            <div className="brand-monogram">A</div>
+            <div className="brand-title">AURA • BEVERLY HILLS</div>
+          </a>
+        </header>
+      </div>
 
       {/* 1. HERO FLAGSHIP SECTION */}
       <section className="hero-section">
