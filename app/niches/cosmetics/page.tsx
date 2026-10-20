@@ -9,6 +9,39 @@ import { useBeforeAfterSlider } from '../../lib/useBeforeAfterSlider';
 
 const OFFLINE_CHAT_REPLY = 'Inquiry logged under VIP protocol. Our concierge desk will follow up discreetly.';
 
+/**
+ * Critical Anti-FOUC & Anti-Glitch CSS Guard:
+ * এটি ব্রাউজারের প্রথম পেইন্টেই (0ms) লোড হবে, ফলে এক্সটার্নাল CSS আসতে দেরি হলেও
+ * কখনোই সাদা স্ক্রিন, ভাঙা ফন্ট বা এআই বারের লাফানো (Layout Jump) দেখা যাবে না।
+ */
+const CRITICAL_ANTI_GLITCH_CSS = `
+  html, body, #cosmetics-root {
+    background-color: #FAF8F5 !important;
+    color: #1A1917;
+    margin: 0;
+    padding: 0;
+    overflow-x: hidden;
+  }
+  #adaModal:not(.show), #aiModal:not(.show) {
+    opacity: 0 !important;
+    visibility: hidden !important;
+    pointer-events: none !important;
+    transform: translate3d(0, 16px, 0);
+  }
+  #sideDock {
+    position: fixed !important;
+    right: 0 !important;
+    bottom: 28px !important;
+    z-index: 9990 !important;
+    transform: translateZ(0);
+    backface-visibility: hidden;
+  }
+  .hero-video-wrapper .slider-frame {
+    background-color: #EAE5DF;
+    transform: translateZ(0);
+  }
+`;
+
 export default function CosmeticPage() {
   useHeroVideoEngine();
   useBeforeAfterSlider();
@@ -68,7 +101,7 @@ export default function CosmeticPage() {
       const totalWidth = inner.scrollWidth / 2;
 
       const step = () => {
-        if (!isDraggingTrack) {
+        if (!isDraggingTrack && totalWidth > 0) {
           velocity = velocity * 0.96 + baseSpeed * 0.04;
           scrollX += velocity;
           if (scrollX >= totalWidth) scrollX -= totalWidth;
@@ -85,9 +118,10 @@ export default function CosmeticPage() {
         lastTime = Date.now();
         box.style.cursor = 'grabbing';
         try { box.setPointerCapture(ev.pointerId); } catch { /* ignore */ }
-      });
+      }, { passive: true });
+
       on(box, 'pointermove', (e) => {
-        if (!isDraggingTrack) return;
+        if (!isDraggingTrack || totalWidth <= 0) return;
         const ev = e as PointerEvent;
         const now = Date.now();
         const dt = now - lastTime;
@@ -99,15 +133,16 @@ export default function CosmeticPage() {
         inner.style.transform = `translate3d(${-scrollX}px, 0, 0)`;
         lastX = ev.clientX;
         lastTime = now;
-      });
+      }, { passive: true });
+
       const endTrackDrag = (e: Event) => {
         if (!isDraggingTrack) return;
         isDraggingTrack = false;
         box.style.cursor = 'grab';
         try { box.releasePointerCapture((e as PointerEvent).pointerId); } catch { /* ignore */ }
       };
-      on(box, 'pointerup', endTrackDrag);
-      on(box, 'pointercancel', endTrackDrag);
+      on(box, 'pointerup', endTrackDrag, { passive: true });
+      on(box, 'pointercancel', endTrackDrag, { passive: true });
       animId = requestAnimationFrame(step);
       cleanups.push(() => cancelAnimationFrame(animId));
     }
@@ -295,7 +330,8 @@ export default function CosmeticPage() {
   }, []);
 
   return (
-    <main id="cosmetics-root">
+    <main id="cosmetics-root" style={{ backgroundColor: '#FAF8F5', minHeight: '100vh' }}>
+      <style dangerouslySetInnerHTML={{ __html: CRITICAL_ANTI_GLITCH_CSS }} />
 
       {/* 0. Top Navigation & Centered Brand Logo */}
       <header className="site-nav">
@@ -308,7 +344,7 @@ export default function CosmeticPage() {
       {/* 1. HERO FLAGSHIP SECTION */}
       <section className="hero-section">
         <div className="hero-content">
-          <div className="hero-pre-tag">• BEVERLY HILLS PRIVATE PRACTICE</div>
+          <div className="hero-pre-tag">BEVERLY HILLS PRIVATE PRACTICE</div>
           
           <h1 className="hero-title">
             Discreet Deep-Plane<br />Facial Architecture
@@ -331,7 +367,7 @@ export default function CosmeticPage() {
 
         {/* Hero Video Slider Frame */}
         <div className="hero-video-wrapper">
-          <div className="slider-frame" id="sliderWrapper">
+          <div className="slider-frame" id="sliderWrapper" style={{ touchAction: 'none' }}>
             
             <div className="sound-toggle" id="soundBtn">
               <span id="soundIcon">🔇</span>
@@ -396,8 +432,8 @@ export default function CosmeticPage() {
               </video>
             </div>
 
-            <div className="slider-divider-bar" id="dividerLine"></div>
-            <div className="slider-knob" id="sliderKnob">
+            <div className="slider-divider-bar" id="dividerLine" style={{ willChange: 'transform' }}></div>
+            <div className="slider-knob" id="sliderKnob" style={{ willChange: 'transform' }}>
               <div className="knob-arrows">
                 <span>&lsaquo;&rsaquo;</span>
               </div>
@@ -794,7 +830,11 @@ export default function CosmeticPage() {
       </section>
 
       {/* 12. BOTTOM-RIGHT PURE TRANSPARENT ROBOT HEAD TRIGGER */}
-      <div className="side-dock-container" id="sideDock">
+      <div
+        className="side-dock-container"
+        id="sideDock"
+        style={{ position: 'fixed', right: 0, bottom: '28px', zIndex: 9990 }}
+      >
         <div className="dock-popout-options">
           <button type="button" className="dock-opt-btn" id="dockAdaBtn" title="ADA Accessibility">
             <span>♿</span>
