@@ -244,7 +244,13 @@ export default function CosmeticPage() {
       activeTopic = topic;
       const typing = appendBot('…');
       const result = await apiRequest<{ reply?: string }>(API_ENDPOINTS.aiChat, {
-        body: { ...cosmeticsIdentity, selectedTopic: topic, history: [] },
+        body: {
+          ...cosmeticsIdentity,
+          niche: 'cosmetics',
+          message: topic,
+          selectedTopic: topic,
+          history: [],
+        },
         timeoutMs: 20000,
         retries: 1,
       });
@@ -319,6 +325,7 @@ export default function CosmeticPage() {
       const result = await apiRequest<{ reply?: string }>(API_ENDPOINTS.aiChat, {
         body: {
           ...cosmeticsIdentity,
+          niche: 'cosmetics',
           message: txt,
           ...(activeTopic ? { selectedTopic: activeTopic } : {}),
           history: historyFromDom(),

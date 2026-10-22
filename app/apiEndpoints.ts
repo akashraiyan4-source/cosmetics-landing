@@ -25,7 +25,7 @@ function resolveBackendUrl(): string {
 }
 
 export const BACKEND_URL = resolveBackendUrl();
-export const NICHE = 'cosmetic-surgery' as const;
+export const NICHE = 'cosmetics' as const;
 
 const endpoint = (path: string) => `${BACKEND_URL}/api/${path}`;
 
