@@ -1,18 +1,28 @@
 'use client';
 
-import React, { useEffect } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { API_ENDPOINTS, cosmeticsIdentity } from '../../apiEndpoints';
-import { apiRequest, readReply } from '../../lib/apiClient';
+import { apiRequest, createIdempotencyKey, readReply } from '../../lib/apiClient';
 import { callCosmeticsApi, prefetchBackendCatalog } from '../../lib/cosmeticsApis';
 import { useHeroVideoEngine } from '../../lib/useHeroVideoEngine';
 import { useBeforeAfterSlider } from '../../lib/useBeforeAfterSlider';
 
+type SubmissionKey = { key: string; fingerprint: string };
+
 const OFFLINE_CHAT_REPLY = 'Inquiry logged under VIP protocol. Our concierge desk will follow up discreetly.';
 
+/** One Idempotency-Key per logical submission: reused for retries of the same payload, renewed if the payload changes. */
+function submissionKeyFor(ref: { current: SubmissionKey | null }, fingerprint: string): string {
+  if (!ref.current || ref.current.fingerprint !== fingerprint) {
+    ref.current = { key: createIdempotencyKey(), fingerprint };
+  }
+  return ref.current.key;
+}
+
 /**
- * Ultimate Anti-FOUC & Anti-Jump Guard:
- * পেজ লোড হওয়ার প্রথম ফ্রেম থেকেই ব্যাকগ্রাউন্ড এবং ডানদিকের ডক বারকে ফিক্সড পজিশনে আটকে রাখবে,
- * ফলে রিফ্রেশ করলে আর কোনোভাবেই এআই বার লাফাবে না বা পেজ গ্লিচ করবে না।
+ * Ultimate Anti-FOUC & Anti-Jump Guard + Text Selection & Chat Booking Styles:
+ * পেজ লোড হওয়ার প্রথম ফ্রেম থেকেই ব্যাকগ্রাউন্ড এবং ডানদিকের ডক বারকে ফিক্সড পজিশনে আটকে রাখবে,
+ * এবং পুরো পেজ ও চ্যাটবার থেকে যেকোনো লেখা মাউস দিয়ে ধরে কপি করার সুবিধা সচল রাখবে।
  */
 const CRITICAL_ANTI_JUMP_CSS = `
   html, body, #cosmetics-root {
@@ -21,6 +31,20 @@ const CRITICAL_ANTI_JUMP_CSS = `
     margin: 0;
     padding: 0;
     overflow-x: hidden;
+  }
+  *, *::before, *::after, html, body, #cosmetics-root, #cosmetics-root *, #aiModal, #aiModal *, .chat-msg {
+    user-select: text !important;
+    -webkit-user-select: text !important;
+    -moz-user-select: text !important;
+    -ms-user-select: text !important;
+  }
+  input, select, textarea, button {
+    user-select: text !important;
+    -webkit-user-select: text !important;
+  }
+  #sliderWrapper, #sliderKnob, #dividerLine, #soundBtn, #sideDock, .peeking-tab-handle, .dock-opt-btn {
+    user-select: none !important;
+    -webkit-user-select: none !important;
   }
   #sideDock {
     position: fixed !important;
@@ -52,11 +76,142 @@ const CRITICAL_ANTI_JUMP_CSS = `
     align-items: center;
     justify-content: center;
   }
+  .chat-calendar-card {
+    align-self: flex-start;
+    width: 94%;
+    background: #FFFFFF;
+    border: 1.5px solid #C5A059;
+    border-radius: 10px;
+    padding: 16px;
+    margin-top: 8px;
+    margin-bottom: 4px;
+    box-shadow: 0 10px 28px rgba(197, 160, 89, 0.16);
+  }
+  .chat-calendar-title {
+    font-size: 0.88rem;
+    font-weight: 700;
+    color: #9A7B38;
+    margin-bottom: 10px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .chat-calendar-input {
+    width: 100%;
+    background: #FAF8F5;
+    border: 1px solid rgba(197, 160, 89, 0.35);
+    padding: 10px 12px;
+    border-radius: 8px;
+    font-size: 0.86rem;
+    color: #1A1917;
+    margin-bottom: 10px;
+    outline: none;
+    box-sizing: border-box;
+  }
+  .chat-calendar-input:focus {
+    border-color: #C5A059;
+    background: #FFFFFF;
+  }
+  .chat-calendar-btn {
+    width: 100%;
+    background: linear-gradient(135deg, #D4AF37 0%, #AA8222 100%);
+    color: #FFFFFF;
+    border: none;
+    padding: 11px 14px;
+    border-radius: 8px;
+    font-size: 0.86rem;
+    font-weight: 700;
+    cursor: pointer;
+    transition: opacity 0.2s ease, transform 0.2s ease;
+  }
+  .chat-calendar-btn:hover {
+    opacity: 0.95;
+    transform: translateY(-1px);
+  }
+  .chat-confirmed-badge {
+    align-self: flex-start;
+    background: #f2faf4;
+    border: 1px solid #d1edd8;
+    border-radius: 8px;
+    padding: 10px 14px;
+    margin-top: 6px;
+    font-size: 0.85rem;
+    font-weight: 700;
+    color: #248a3d;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
 `;
 
 export default function CosmeticPage() {
   useHeroVideoEngine();
   useBeforeAfterSlider();
+
+  const [showCalendarWidget, setShowCalendarWidget] = useState(false);
+  const [chatSlot, setChatSlot] = useState('');
+  const [chatSlotName, setChatSlotName] = useState('');
+  const [chatSlotPhone, setChatSlotPhone] = useState('');
+  const [chatSlotStatus, setChatSlotStatus] = useState({ text: '', color: '' });
+  const [isChatSlotConfirmed, setIsChatSlotConfirmed] = useState(false);
+
+  const isChatSlotConfirmedRef = useRef(false);
+  const chatSlotInFlight = useRef(false);
+  const chatSlotIdempotencyKey = useRef<SubmissionKey | null>(null);
+  const activeTopicStateRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    isChatSlotConfirmedRef.current = isChatSlotConfirmed;
+  }, [isChatSlotConfirmed]);
+
+  useEffect(() => {
+    const aiChatBox = document.getElementById('aiChatBox');
+    if (aiChatBox) {
+      aiChatBox.scrollTop = aiChatBox.scrollHeight;
+    }
+  }, [showCalendarWidget, isChatSlotConfirmed, chatSlotStatus]);
+
+  const confirmChatSlot = async () => {
+    if (!chatSlot) {
+      alert('Please pick a date and time slot.');
+      return;
+    }
+    if (!chatSlotName.trim() || !chatSlotPhone.trim()) {
+      alert('Please fill in your name and phone number.');
+      return;
+    }
+    if (chatSlotInFlight.current) return;
+    chatSlotInFlight.current = true;
+    setChatSlotStatus({ text: 'Syncing VIP appointment...', color: '#9A7B38' });
+
+    try {
+      const payload = {
+        fullName: chatSlotName.trim(),
+        phone: chatSlotPhone.trim(),
+        appointmentDate: chatSlot,
+        treatment: activeTopicStateRef.current || 'Deep-Plane Facial Architecture',
+        niche: 'cosmetics',
+      };
+      const result = await apiRequest(API_ENDPOINTS.booking, {
+        body: payload,
+        idempotencyKey: submissionKeyFor(chatSlotIdempotencyKey, JSON.stringify(payload)),
+      });
+
+      if (result.ok) {
+        chatSlotIdempotencyKey.current = null;
+        setChatSlotStatus({ text: '✓ VIP Slot Confirmed!', color: '#34c759' });
+        setIsChatSlotConfirmed(true);
+        setShowCalendarWidget(false); // বুকিং সাকসেসফুল হলে ফর্ম গায়েব হয়ে যাবে
+      } else if (result.networkError) {
+        setChatSlotStatus({ text: 'Connection error.', color: '#dc2626' });
+      } else {
+        chatSlotIdempotencyKey.current = null;
+        setChatSlotStatus({ text: 'Could not reserve slot.', color: '#dc2626' });
+      }
+    } finally {
+      chatSlotInFlight.current = false;
+    }
+  };
 
   useEffect(() => {
     const cleanups: Array<() => void> = [];
@@ -212,6 +367,7 @@ export default function CosmeticPage() {
       if (!sideDock.contains(target) && !adaModal.contains(target) && !aiModal.contains(target)) closeAllSideModals();
     });
 
+    const aiChatMessagesList = document.getElementById('aiChatMessagesList');
     const aiChatBox = document.getElementById('aiChatBox');
     const aiChatInput = document.getElementById('aiChatInput') as HTMLInputElement | null;
     const aiChatSend = document.getElementById('aiChatSend');
@@ -220,29 +376,37 @@ export default function CosmeticPage() {
     let topicInFlight: string | null = null;
 
     const historyFromDom = () => {
-      if (!aiChatBox) return [];
-      return [...aiChatBox.querySelectorAll('.chat-msg')].map((node) => ({
+      const container = aiChatMessagesList || aiChatBox;
+      if (!container) return [];
+      return [...container.querySelectorAll('.chat-msg')].map((node) => ({
         role: node.classList.contains('user') ? 'user' : 'assistant',
         content: (node.textContent || '').trim(),
       })).filter((turn) => turn.content && turn.content !== '…' && turn.content !== 'Analyzing inquiry with VIP AI...');
     };
 
-    const appendBot = (text: string) => {
-      if (!aiChatBox) return null;
+    const appendMessage = (role: 'bot' | 'user', text: string) => {
+      const container = aiChatMessagesList || aiChatBox;
+      if (!container) return null;
       const el = document.createElement('div');
-      el.className = 'chat-msg bot';
+      el.className = `chat-msg ${role}`;
+      el.style.userSelect = 'text';
+      el.style.webkitUserSelect = 'text';
+      el.style.cursor = 'text';
       el.textContent = text;
-      aiChatBox.appendChild(el);
-      aiChatBox.scrollTop = aiChatBox.scrollHeight;
+      container.appendChild(el);
+      if (aiChatBox) aiChatBox.scrollTop = aiChatBox.scrollHeight;
       return el;
     };
 
     const openTopicConversation = async (topic: string) => {
       if (topicInFlight === topic) return;
-      if (activeTopic === topic && (aiChatBox?.querySelectorAll('.chat-msg').length ?? 0) > 1) return;
+      const container = aiChatMessagesList || aiChatBox;
+      if (activeTopic === topic && (container?.querySelectorAll('.chat-msg').length ?? 0) > 1) return;
       topicInFlight = topic;
       activeTopic = topic;
-      const typing = appendBot('…');
+      activeTopicStateRef.current = topic;
+
+      const typing = appendMessage('bot', '…');
       const result = await apiRequest<{ reply?: string }>(API_ENDPOINTS.aiChat, {
         body: {
           ...cosmeticsIdentity,
@@ -256,7 +420,12 @@ export default function CosmeticPage() {
       });
       const reply = result.ok ? (readReply(result.data) ?? OFFLINE_CHAT_REPLY) : OFFLINE_CHAT_REPLY;
       if (typing) typing.textContent = reply;
-      else appendBot(reply);
+      else appendMessage('bot', reply);
+
+      if (!isChatSlotConfirmedRef.current) {
+        window.setTimeout(() => setShowCalendarWidget(true), 500);
+      }
+
       if (aiChatBox) aiChatBox.scrollTop = aiChatBox.scrollHeight;
       topicInFlight = null;
     };
@@ -315,27 +484,44 @@ export default function CosmeticPage() {
       if (!aiChatInput || !aiChatBox || chatBusy) return;
       const txt = aiChatInput.value.trim();
       if (!txt) return;
+      if (txt.length > 300) {
+        alert('Please keep your message under 300 characters.');
+        return;
+      }
+
       chatBusy = true;
-      const userDiv = document.createElement('div');
-      userDiv.className = 'chat-msg user';
-      userDiv.textContent = txt;
-      aiChatBox.appendChild(userDiv);
+      const history = historyFromDom();
+      appendMessage('user', txt);
       aiChatInput.value = '';
-      const botDiv = appendBot('Analyzing inquiry with VIP AI...') as HTMLDivElement;
-      const result = await apiRequest<{ reply?: string }>(API_ENDPOINTS.aiChat, {
-        body: {
-          ...cosmeticsIdentity,
-          niche: 'cosmetics',
-          message: txt,
-          ...(activeTopic ? { selectedTopic: activeTopic } : {}),
-          history: historyFromDom(),
-        },
-        timeoutMs: 20000,
-        retries: 1,
-      });
-      botDiv.textContent = result.ok ? (readReply(result.data) ?? OFFLINE_CHAT_REPLY) : OFFLINE_CHAT_REPLY;
-      aiChatBox.scrollTop = aiChatBox.scrollHeight;
-      chatBusy = false;
+
+      const bookingKeywords = ['book', 'appointment', 'consultation', 'slot', 'schedule', 'reserve', 'তারিখ', 'বুক'];
+      const wantsBooking = bookingKeywords.some((keyword) => txt.toLowerCase().includes(keyword));
+
+      const botDiv = appendMessage('bot', 'Analyzing inquiry with VIP AI...') as HTMLDivElement;
+      try {
+        const result = await apiRequest<{ reply?: string }>(API_ENDPOINTS.aiChat, {
+          body: {
+            ...cosmeticsIdentity,
+            niche: 'cosmetics',
+            message: txt,
+            ...(activeTopic ? { selectedTopic: activeTopic } : {}),
+            history,
+          },
+          timeoutMs: 20000,
+          retries: 1,
+        });
+        const replyText = result.ok ? (readReply(result.data) ?? OFFLINE_CHAT_REPLY) : OFFLINE_CHAT_REPLY;
+        if (botDiv) botDiv.textContent = replyText;
+
+        if (wantsBooking && !isChatSlotConfirmedRef.current) {
+          window.setTimeout(() => setShowCalendarWidget(true), 600);
+        }
+      } catch {
+        if (botDiv) botDiv.textContent = OFFLINE_CHAT_REPLY;
+      } finally {
+        if (aiChatBox) aiChatBox.scrollTop = aiChatBox.scrollHeight;
+        chatBusy = false;
+      }
     };
 
     on(aiChatSend, 'click', () => { void sendAiChat(); });
@@ -349,7 +535,7 @@ export default function CosmeticPage() {
   }, []);
 
   return (
-    <main id="cosmetics-root" style={{ backgroundColor: '#FAF8F5', minHeight: '100vh' }}>
+    <main id="cosmetics-root" style={{ backgroundColor: '#FAF8F5', minHeight: '100vh', userSelect: 'text', WebkitUserSelect: 'text' }}>
       <style dangerouslySetInnerHTML={{ __html: CRITICAL_ANTI_JUMP_CSS }} />
 
       {/* 0. Top Navigation & Centered Brand Logo inside a Premium Card Container */}
@@ -914,19 +1100,63 @@ export default function CosmeticPage() {
       </div>
 
       {/* 14. STANDALONE VIP AI CONCIERGE CHAT MODAL */}
-      <div className="ai-popup-modal" id="aiModal">
+      <div className="ai-popup-modal" id="aiModal" style={{ userSelect: 'text', WebkitUserSelect: 'text' }}>
         <div className="panel-head">
           <span>VIP AI Concierge</span>
           <button type="button" className="panel-close" id="aiCloseBtn">&times;</button>
         </div>
         <div className="panel-content">
-          <div className="chat-box" id="aiChatBox">
-            <div className="chat-msg bot">
-              Welcome to Aura Beverly Hills. How may I discreetly guide your consultation candidacy today?
+          <div className="chat-box" id="aiChatBox" style={{ userSelect: 'text', WebkitUserSelect: 'text' }}>
+            <div id="aiChatMessagesList" style={{ display: 'flex', flexDirection: 'column', gap: '10px', width: '100%' }}>
+              <div className="chat-msg bot" style={{ userSelect: 'text', WebkitUserSelect: 'text', cursor: 'text' }}>
+                Welcome to Aura Beverly Hills. How may I discreetly guide your consultation candidacy today?
+              </div>
             </div>
+
+            {/* ডায়নামিক বুকিং উইজেট (শর্ত সাপেক্ষে আসবে এবং বুকিং হয়ে গেলে গায়েব হয়ে যাবে) */}
+            {showCalendarWidget && !isChatSlotConfirmed && (
+              <div className="chat-calendar-card" onClick={(e) => e.stopPropagation()}>
+                <div className="chat-calendar-title">📅 Reserve Priority Consultation Slot</div>
+                <input
+                  type="datetime-local"
+                  value={chatSlot}
+                  onChange={(e) => setChatSlot(e.target.value)}
+                  className="chat-calendar-input"
+                />
+                <input
+                  type="text"
+                  value={chatSlotName}
+                  onChange={(e) => setChatSlotName(e.target.value)}
+                  className="chat-calendar-input"
+                  placeholder="Enter your full name"
+                />
+                <input
+                  type="tel"
+                  value={chatSlotPhone}
+                  onChange={(e) => setChatSlotPhone(e.target.value)}
+                  className="chat-calendar-input"
+                  placeholder="Enter your phone number"
+                />
+                <button type="button" className="chat-calendar-btn" onClick={confirmChatSlot}>
+                  Confirm Slot Reservation
+                </button>
+                {chatSlotStatus.text && (
+                  <p style={{ fontSize: '0.78rem', marginTop: '6px', fontWeight: 600, color: chatSlotStatus.color }}>
+                    {chatSlotStatus.text}
+                  </p>
+                )}
+              </div>
+            )}
+
+            {/* সফল বুকিংয়ের পর চ্যাটের নিচে পার্মানেন্ট ব্যাজ */}
+            {isChatSlotConfirmed && (
+              <div className="chat-confirmed-badge">
+                <span>✓ VIP Slot Confirmed!</span>
+              </div>
+            )}
           </div>
           <div className="chat-input-row">
-            <input type="text" id="aiChatInput" placeholder="Ask about procedure, downtime, NDA..." />
+            <input type="text" id="aiChatInput" maxLength={300} placeholder="Ask about procedure, downtime, NDA..." />
             <button type="button" id="aiChatSend">Send</button>
           </div>
           <div className="compliance-footer-strip">
